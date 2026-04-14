@@ -1,0 +1,64 @@
+Master Services Agreement (Sample Legal Corpus)
+
+1. Governing Law
+This Agreement is made between the parties and shall be governed by the laws of India.
+All legal interpretation and enforcement shall be subject to competent courts in Bengaluru, Karnataka, unless arbitration is triggered under this Agreement.
+
+2. Confidentiality
+The parties agree to maintain confidentiality of all proprietary information disclosed under this Agreement.
+Confidential information includes business plans, source code, customer data, security procedures, and pricing terms.
+Any breach of confidentiality shall result in immediate termination rights, injunctive relief rights, and possible monetary damages.
+Each party shall ensure employees and contractors sign confidentiality obligations no less restrictive than this clause.
+
+3. Payment Terms
+All invoices must be settled within 30 days from the invoice date.
+Payments delayed beyond 30 days may attract interest at 1% per month or the maximum lawful rate, whichever is lower.
+Failure to pay may result in suspension of services after a 7-day cure notice.
+Disputed invoices must be reported in writing within 10 days of receipt, with specific reasons and supporting records.
+Undisputed portions of any invoice remain payable on time.
+
+4. Service Levels
+The service provider shall use commercially reasonable efforts to maintain 99.5% monthly uptime, excluding scheduled maintenance.
+Scheduled maintenance shall be communicated at least 48 hours in advance where reasonably possible.
+If uptime falls below 99.5%, the customer may request service credits as specified in the service schedule.
+
+5. Data Protection and Security
+Each party shall implement reasonable technical and organizational security measures.
+Personal data processing, if any, shall comply with applicable data protection laws and written processing instructions.
+Security incidents affecting customer data must be reported without undue delay and, where feasible, within 72 hours of discovery.
+
+6. Intellectual Property
+All pre-existing intellectual property remains with the original owner.
+No transfer of ownership occurs unless explicitly stated in a signed written amendment.
+Unauthorized use, reproduction, or distribution of proprietary materials is strictly prohibited.
+Customer content remains customer-owned, and provider receives only a limited license required to perform services.
+
+7. Warranties and Disclaimers
+Each party warrants it has authority to enter this Agreement.
+Except as expressly stated, services are provided on an "as is" and "as available" basis.
+No implied warranties of merchantability, fitness for a particular purpose, or non-infringement are provided, to the extent permitted by law.
+
+8. Limitation of Liability
+Neither party is liable for indirect, incidental, special, punitive, or consequential damages.
+Aggregate liability under this Agreement shall not exceed fees paid in the 12 months preceding the claim, except for confidentiality breaches, fraud, or willful misconduct.
+
+9. Indemnity
+Provider shall defend and indemnify customer against third-party claims alleging provider materials infringe intellectual property rights, subject to prompt notice and cooperation.
+Customer shall indemnify provider for claims arising from customer data, unlawful instructions, or misuse of services.
+
+10. Term and Termination
+This Agreement starts on the effective date and continues until terminated.
+Either party may terminate for material breach if the breach is not cured within 30 days after written notice.
+Either party may terminate for insolvency, bankruptcy filing, or cessation of business operations by the other party.
+Upon termination, each party shall return or delete confidential information as required by law and contract.
+
+11. Dispute Resolution
+All disputes shall first be escalated to executive representatives for good-faith negotiation.
+If unresolved within 30 days, disputes shall be resolved through arbitration in Bengaluru under applicable arbitration law.
+The arbitration proceedings shall be conducted in English.
+
+12. Notices and Miscellaneous
+Formal notices must be in writing and sent by recognized courier, registered post, or official email channels.
+Failure to enforce a provision does not waive future enforcement rights.
+If any provision is held unenforceable, the remaining provisions remain in full force and effect.
+This Agreement constitutes the entire understanding between parties and supersedes prior discussions on the same subject matter.
