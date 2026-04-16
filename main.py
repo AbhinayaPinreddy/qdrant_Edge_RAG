@@ -4,6 +4,7 @@ import re
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query as FastAPIQuery
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from qdrant_edge import EdgeShard, Query, QueryRequest
 from fastembed import TextEmbedding
@@ -130,6 +131,23 @@ def search(query: str):
     return [r.payload.get("content", "") for r in results if r.payload]
 
 # ---------------- RAG PIPELINE ----------------
+PROMPT_TEMPLATE = """You are a legal assistant responding to a question with information drawn only from the provided context.
+
+Instructions:
+- Answer using ONLY the context below.
+- Do not invent facts or cite information not present in the context.
+- If the context does not contain a clear answer, say: "No relevant legal information found in the provided context."
+- Keep the response concise, professional, and directly relevant to the question.
+- Avoid extraneous commentary, opinions, or speculation.
+
+Context:
+{context}
+
+Question: {query}
+
+Answer:"""
+
+
 def rag(query: str):
     docs = search(query)
 
@@ -137,13 +155,7 @@ def rag(query: str):
         return "No relevant legal information found."
 
     context = "\n".join(docs)
-
-    prompt = f"""You are a legal assistant. Answer ONLY using the context below.
-
-Context:
-{context}
-
-Question: {query}"""
+    prompt = PROMPT_TEMPLATE.format(context=context, query=query)
 
     try:
         return generate_answer(prompt)
@@ -182,3 +194,71 @@ def ask(q: str = FastAPIQuery(..., min_length=3, max_length=MAX_QUERY_CHARS)):
     except Exception as e:
         logger.exception("Ask request failed")
         raise HTTPException(status_code=500, detail=f"Query failed: {e}") from e
+
+
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return """<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+    <meta charset=\"UTF-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+    <title>Legal RAG Assistant</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f5f7fb; margin: 0; padding: 0; }
+        .container { max-width: 760px; margin: 40px auto; background: #ffffff; padding: 24px; border-radius: 12px; box-shadow: 0 16px 32px rgba(0,0,0,0.08); }
+        h1 { margin-top: 0; }
+        textarea { width: 100%; min-height: 120px; border: 1px solid #d1d5db; border-radius: 8px; padding: 12px; font-size: 15px; resize: vertical; }
+        button { background: #2563eb; color: white; border: none; border-radius: 8px; padding: 12px 22px; font-size: 15px; cursor: pointer; }
+        button:disabled { background: #9ca3af; cursor: default; }
+        .result { margin-top: 20px; padding: 18px; background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 10px; white-space: pre-wrap; }
+        .status { margin-top: 10px; font-size: 14px; color: #4b5563; }
+    </style>
+</head>
+<body>
+    <div class=\"container\">
+        <h1>Legal RAG Assistant</h1>
+        <p>Enter a legal question and get a response from the local RAG system.</p>
+        <textarea id=\"queryInput\" placeholder=\"Ask a legal question...\"></textarea>
+        <div style=\"margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap;\">
+            <button id=\"askButton\">Ask</button>
+            <span class=\"status\" id=\"statusText\">Ready to ask.</span>
+        </div>
+        <div class=\"result\" id=\"answerBox\">Your answer will appear here.</div>
+    </div>
+    <script>
+        const askButton = document.getElementById('askButton');
+        const queryInput = document.getElementById('queryInput');
+        const statusText = document.getElementById('statusText');
+        const answerBox = document.getElementById('answerBox');
+
+        askButton.addEventListener('click', async () => {
+            const query = queryInput.value.trim();
+            if (!query) {
+                statusText.textContent = 'Please enter a question first.';
+                return;
+            }
+
+            askButton.disabled = true;
+            statusText.textContent = 'Requesting answer...';
+            answerBox.textContent = '';
+
+            try {
+                const response = await fetch(`/ask?q=${encodeURIComponent(query)}`);
+                if (!response.ok) {
+                    const error = await response.text();
+                    throw new Error(error || 'Request failed');
+                }
+                const data = await response.json();
+                answerBox.textContent = data.answer;
+                statusText.textContent = 'Answer received.';
+            } catch (err) {
+                answerBox.textContent = `Error: ${err.message}`;
+                statusText.textContent = 'Unable to fetch answer.';
+            } finally {
+                askButton.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>"""

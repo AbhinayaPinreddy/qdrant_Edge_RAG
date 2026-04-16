@@ -61,6 +61,9 @@ uvicorn main:app --reload
 Server URL:
 - `http://127.0.0.1:8000`
 
+Browser UI:
+- `http://127.0.0.1:8000/`
+
 ## 6) Test endpoints
 
 Health:
