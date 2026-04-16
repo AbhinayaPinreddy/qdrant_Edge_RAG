@@ -33,7 +33,7 @@ set OPENROUTER_API_KEY=your_openrouter_key_here
 Optional: choose model explicitly:
 
 ```cmd
-set OPENROUTER_MODEL=google/gemma-4
+set OPENROUTER_MODEL=meta-llama/llama-3-8b-instruct
 ```
 
 If no valid key is available, the app returns an extractive fallback answer from retrieved text.
