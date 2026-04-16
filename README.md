@@ -25,9 +25,14 @@ pip install -r requirements.txt
 ## 3) Configure API key (for LLM answers)
 
 Set your OpenRouter key in the same terminal where you run Uvicorn:
+for windows use:
 
 ```cmd
 set OPENROUTER_API_KEY=your_openrouter_key_here
+```
+for linux use:
+```cmd
+export OPENROUTER_API_KEY=your_openrouter_key_here
 ```
 
 Optional: choose model explicitly:
