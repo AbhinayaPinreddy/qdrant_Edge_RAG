@@ -3,66 +3,57 @@ import os
 import re
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query as FastAPIQuery
+from fastapi import FastAPI, Query as FastAPIQuery
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from qdrant_edge import EdgeShard, Query, QueryRequest
+from qdrant_edge import EdgeShard, Query, QueryRequest, ScrollRequest
 from fastembed import TextEmbedding
 from openai import OpenAI
-from openai import OpenAIError
 
 # ---------------- CONFIG ----------------
 MODEL_NAME = "BAAI/bge-small-en"
 VECTOR_NAME = "text"
 COLLECTION = "legal_docs"
-TOP_K = int(os.getenv("TOP_K", "5"))
-MAX_QUERY_CHARS = int(os.getenv("MAX_QUERY_CHARS", "500"))
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-4")
+
+TOP_K = 10
+OPENROUTER_MODEL = "meta-llama/llama-3-8b-instruct"
 
 BASE_PATH = "./qdrant_data"
 SHARD_PATH = os.path.join(BASE_PATH, COLLECTION)
 
-logger = logging.getLogger("rag_api")
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logging.basicConfig(level="INFO")
 
 # ---------------- EMBEDDING ----------------
-text_model = TextEmbedding(
-    model_name=MODEL_NAME,
-    cache_dir="./models"
-)
+text_model = TextEmbedding(model_name=MODEL_NAME, cache_dir="./models")
 
 def embed(text: str):
     return list(text_model.embed([text]))[0].tolist()
 
-# ---------------- QDRANT EDGE ----------------
+# ---------------- QDRANT ----------------
 edge_shard: Optional[EdgeShard] = None
 
-def get_edge_shard() -> EdgeShard:
+def get_edge_shard():
     global edge_shard
-
-    if edge_shard is not None:
+    if edge_shard:
         return edge_shard
 
     if not os.path.exists(SHARD_PATH):
-        raise RuntimeError(" Qdrant shard not found. Run ingest.py first.")
+        raise RuntimeError("Run ingest.py first.")
 
     edge_shard = EdgeShard.load(SHARD_PATH)
     return edge_shard
 
-# ---------------- GEMMA (OpenRouter) ----------------
+# ---------------- LLM ----------------
 llm_client: Optional[OpenAI] = None
 
-def get_llm_client() -> OpenAI:
+def get_llm_client():
     global llm_client
-
-    if llm_client is not None:
+    if llm_client:
         return llm_client
 
     api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError(
-            "Missing API key. Set OPENROUTER_API_KEY (or OPENAI_API_KEY) and restart server."
-        )
+        raise RuntimeError("Missing API key")
 
     llm_client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
@@ -70,139 +61,200 @@ def get_llm_client() -> OpenAI:
     )
     return llm_client
 
-def generate_answer(prompt: str):
+def generate_answer(messages):
     client = get_llm_client()
-    try:
-        response = client.chat.completions.create(
-            model=OPENROUTER_MODEL,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content
-    except OpenAIError as exc:
-        raise RuntimeError(f"LLM request failed: {exc}") from exc
+    response = client.chat.completions.create(
+        model=OPENROUTER_MODEL,
+        messages=messages
+    )
+    return response.choices[0].message.content
 
-def build_fallback_answer(query: str, docs: list[str]) -> str:
-    """Return an extractive answer when LLM is unavailable."""
-    query_terms = {word.lower() for word in query.split() if len(word) > 2}
-    sentences: list[str] = []
-
-    for doc in docs:
-        normalized_doc = doc.replace("\n", " ").strip()
-        # Split sentence endings but preserve decimal numbers like 1.5%.
-        parts = re.split(r"(?<!\d)\.(?!\d)|[!?]", normalized_doc)
-        sentences.extend([f"{part.strip()}." for part in parts if part.strip()])
-
-    scored_sentences = []
-    for sentence in sentences:
-        sentence_lower = sentence.lower()
-        score = sum(1 for term in query_terms if term in sentence_lower)
-        scored_sentences.append((score, sentence))
-
-    scored_sentences.sort(key=lambda item: item[0], reverse=True)
-    top_sentences = []
-    for score, text in scored_sentences:
-        if score <= 0:
-            continue
-        if text in top_sentences:
-            continue
-        top_sentences.append(text)
-        if len(top_sentences) == 3:
-            break
-
-    if top_sentences:
-        return "Based on the stored legal context: " + " ".join(top_sentences)
-
-    return "Relevant context was found, but no direct extractive match is available."
+# ---------------- PATTERNS ----------------
+GREETING_PATTERN = re.compile(r"^(hi|hello|hey)\b", re.I)
+SUMMARY_PATTERN = re.compile(r"\b(summary|summarize|overview)\b", re.I)
 
 # ---------------- SEARCH ----------------
 def search(query: str):
     shard = get_edge_shard()
-
-    query_vector = embed(query)
+    vector = embed(query)
 
     results = shard.query(
         QueryRequest(
-            query=Query.Nearest(query_vector, using=VECTOR_NAME),
+            query=Query.Nearest(vector, using=VECTOR_NAME),
             limit=TOP_K,
             with_payload=True
         )
     )
 
-    return [r.payload.get("content", "") for r in results if r.payload]
+    return [r.payload["content"] for r in results if r.payload]
 
-# ---------------- RAG PIPELINE ----------------
-PROMPT_TEMPLATE = """You are a legal assistant responding to a question with information drawn only from the provided context.
 
-Instructions:
-- Answer using ONLY the context below.
-- Do not invent facts or cite information not present in the context.
-- If the context does not contain a clear answer, say: "No relevant legal information found in the provided context."
-- Keep the response concise, professional, and directly relevant to the question.
-- Avoid extraneous commentary, opinions, or speculation.
+def retrieve_all_docs() -> list[str]:
+    shard = get_edge_shard()
+    docs: list[str] = []
+    offset = 0
+    page_size = 50
+
+    while True:
+        results = shard.scroll(
+            ScrollRequest(
+                offset=offset,
+                limit=page_size,
+                with_payload=True,
+            )
+        )
+
+        if not results:
+            break
+
+        batch = results[0] if isinstance(results, tuple) and results else results
+        if not batch:
+            break
+
+        docs.extend([r.payload["content"] for r in batch if r.payload])
+        offset += len(batch)
+
+        if len(batch) < page_size:
+            break
+
+    return docs
+
+# ---------------- PROMPT ----------------
+PROMPT_TEMPLATE = """You are a legal assistant.
+
+Use ONLY the provided context.
+
+If the user greets you or says hello:
+- Reply politely as a legal assistant.
+- Tell them to ask a legal question related to the provided context.
+
+If asked to summarize:
+- Provide a direct summary of the retrieved context only.
+- Do NOT include an introductory phrase such as "Here is a summary..." or "Below is a summary...".
+- Do NOT name the document or state its title unless the question explicitly asks for it.
+- Cover ALL major sections of the document.
+- Each sentence should represent a DIFFERENT section.
+- Do NOT skip important sections.
+- Use exact details (e.g., "Indian law", "Bengaluru").
+- Keep it clear, structured, and concise.
+
+If asked for 5–6 lines:
+- Write EXACTLY 5–6 sentences.
+- Each sentence = one section.
+
+If the question is unrelated to the legal context, say exactly: "I can only answer legal questions based on the provided context. Please ask a question about the document."
 
 Context:
 {context}
 
 Question: {query}
 
-Answer:"""
+Answer:
+"""
+
+def build_prompt(query, context):
+    return [
+        {"role": "system", "content": PROMPT_TEMPLATE.format(context=context, query=query)},
+        {"role": "user", "content": query}
+    ]
+
+SUMMARY_CLEANUP_REGEX = re.compile(
+    r"^(?:\s*(?:here is|below is|following is|summary of|a summary of|the summary of)\s*(?:the\s*)?[^:]*:?\s*)",
+    re.I
+)
+
+SECTION_HEADER_PATTERN = re.compile(r"^\s*(\d+)\.\s+(.+)$", re.M)
 
 
+def extract_sections(text: str) -> list[tuple[str, str]]:
+    sections: list[tuple[str, str]] = []
+    matches = list(SECTION_HEADER_PATTERN.finditer(text))
+    if not matches:
+        return sections
+
+    for idx, match in enumerate(matches):
+        title = match.group(2).strip()
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        body = text[start:end].strip().replace("\n", " ")
+        sections.append((title, body))
+    return sections
+
+
+def summarize_sections(docs: list[str]) -> str | None:
+    all_sections: list[tuple[str, str]] = []
+    for doc in docs:
+        all_sections.extend(extract_sections(doc))
+
+    if not all_sections:
+        return None
+
+    sentence_summary: list[str] = []
+    for title, body in all_sections:
+        parts = re.split(r"(?<!\d)\.(?!\d)|[!?]", body)
+        first_sentence = next((p.strip() for p in parts if p.strip()), "").strip()
+        if not first_sentence:
+            continue
+        sentence = f"{title}: {first_sentence}."
+        sentence_summary.append(sentence)
+
+    return " ".join(sentence_summary) if sentence_summary else None
+
+
+def clean_summary_answer(answer: str) -> str:
+    cleaned = SUMMARY_CLEANUP_REGEX.sub("", answer.strip())
+    return cleaned or answer.strip()
+
+
+# ---------------- RAG ----------------
 def rag(query: str):
-    docs = search(query)
+    query = query.strip()
+
+    try:
+        if SUMMARY_PATTERN.search(query):
+            docs = retrieve_all_docs()
+        else:
+            docs = search(query)
+    except Exception as e:
+        return f"Error processing query: {e}"
 
     if not docs:
         return "No relevant legal information found."
 
-    context = "\n".join(docs)
-    prompt = PROMPT_TEMPLATE.format(context=context, query=query)
+    context = "\n\n--- SECTION ---\n\n".join(docs)
+
+    if SUMMARY_PATTERN.search(query):
+        section_summary = summarize_sections(docs)
+        if section_summary:
+            return section_summary
 
     try:
-        return generate_answer(prompt)
-    except Exception as exc:
-        logger.warning("Falling back to extractive answer: %s", exc)
-        return build_fallback_answer(query, docs)
+        answer = generate_answer(build_prompt(query, context))
+        if SUMMARY_PATTERN.search(query):
+            return clean_summary_answer(answer)
+        return answer
+    except Exception as e:
+        logging.warning("LLM generation failed: %s", e)
+        return f"Error: {str(e)}"
 
 # ---------------- FASTAPI ----------------
 app = FastAPI()
 
-
 class AskResponse(BaseModel):
     answer: str
 
-
-class HealthResponse(BaseModel):
-    status: str
-
-
-@app.get("/health", response_model=HealthResponse)
-def health():
-    return HealthResponse(status="ok")
-
-
-@app.get("/ready", response_model=HealthResponse)
-def ready():
-    if not os.path.exists(SHARD_PATH):
-        raise HTTPException(status_code=503, detail="Shard not found. Run ingest.py first.")
-    return HealthResponse(status="ready")
-
 @app.get("/ask", response_model=AskResponse)
-def ask(q: str = FastAPIQuery(..., min_length=3, max_length=MAX_QUERY_CHARS)):
-    try:
-        answer = rag(q)
-        return AskResponse(answer=answer)
-    except Exception as e:
-        logger.exception("Ask request failed")
-        raise HTTPException(status_code=500, detail=f"Query failed: {e}") from e
+def ask(q: str = FastAPIQuery(...)):
+    return AskResponse(answer=rag(q))
 
 
 @app.get("/", response_class=HTMLResponse)
 def home():
     return """<!DOCTYPE html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-    <meta charset=\"UTF-8\">
-    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Legal RAG Assistant</title>
     <style>
         body { font-family: Arial, sans-serif; background: #f5f7fb; margin: 0; padding: 0; }
@@ -216,16 +268,17 @@ def home():
     </style>
 </head>
 <body>
-    <div class=\"container\">
+    <div class="container">
         <h1>Legal RAG Assistant</h1>
         <p>Enter a legal question and get a response from the local RAG system.</p>
-        <textarea id=\"queryInput\" placeholder=\"Ask a legal question...\"></textarea>
-        <div style=\"margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap;\">
-            <button id=\"askButton\">Ask</button>
-            <span class=\"status\" id=\"statusText\">Ready to ask.</span>
+        <textarea id="queryInput" placeholder="Ask a legal question..."></textarea>
+        <div style="margin-top: 14px; display: flex; gap: 10px;">
+            <button id="askButton">Ask</button>
+            <span class="status" id="statusText">Ready to ask.</span>
         </div>
-        <div class=\"result\" id=\"answerBox\">Your answer will appear here.</div>
+        <div class="result" id="answerBox">Your answer will appear here.</div>
     </div>
+
     <script>
         const askButton = document.getElementById('askButton');
         const queryInput = document.getElementById('queryInput');
@@ -234,6 +287,7 @@ def home():
 
         askButton.addEventListener('click', async () => {
             const query = queryInput.value.trim();
+
             if (!query) {
                 statusText.textContent = 'Please enter a question first.';
                 return;
@@ -245,12 +299,14 @@ def home():
 
             try {
                 const response = await fetch(`/ask?q=${encodeURIComponent(query)}`);
+
                 if (!response.ok) {
-                    const error = await response.text();
-                    throw new Error(error || 'Request failed');
+                    throw new Error("Request failed");
                 }
+
                 const data = await response.json();
                 answerBox.textContent = data.answer;
+
                 statusText.textContent = 'Answer received.';
             } catch (err) {
                 answerBox.textContent = `Error: ${err.message}`;
@@ -261,4 +317,5 @@ def home():
         });
     </script>
 </body>
-</html>"""
+</html>
+"""

@@ -1,5 +1,7 @@
 import os
 import shutil
+import re
+import hashlib
 from qdrant_edge import (
     Distance,
     EdgeConfig,
@@ -8,7 +10,6 @@ from qdrant_edge import (
     Point,
     UpdateOperation,
 )
-import hashlib
 from fastembed import TextEmbedding
 
 # -------- CONFIG --------
@@ -35,6 +36,7 @@ def create_fresh_shard() -> EdgeShard:
     if os.path.exists(SHARD_PATH):
         shutil.rmtree(SHARD_PATH)
     os.makedirs(SHARD_PATH, exist_ok=True)
+
     return EdgeShard.create(
         SHARD_PATH,
         EdgeConfig(
@@ -44,19 +46,15 @@ def create_fresh_shard() -> EdgeShard:
         ),
     )
 
-# -------- CHUNKING --------
-def chunk_text(text: str, chunk_size: int = 90, overlap: int = 20):
-    if overlap >= chunk_size:
-        raise ValueError("overlap must be smaller than chunk_size")
+# -------- SECTION-BASED CHUNKING --------
+def chunk_text(text: str):
+    sections = re.split(r"\n\d+\.\s", text)
 
-    words = text.split()
     chunks = []
-    step = chunk_size - overlap
-
-    for i in range(0, len(words), step):
-        chunk = " ".join(words[i:i+chunk_size])
-        if chunk.strip():
-            chunks.append(chunk)
+    for sec in sections:
+        sec = sec.strip()
+        if sec:
+            chunks.append(sec)
 
     return chunks
 
@@ -77,20 +75,24 @@ def insert_data():
     points = []
 
     for index, chunk in enumerate(chunks):
-        stable_id = hashlib.md5(f"{COLLECTION}:{index}:{chunk}".encode("utf-8")).hexdigest()
+        stable_id = hashlib.md5(
+            f"{COLLECTION}:{index}:{chunk}".encode("utf-8")
+        ).hexdigest()
+
         point = Point(
             id=stable_id,
             vector={VECTOR_NAME: embed(chunk)},
-            payload={"content": chunk, "chunk_index": index, "source": DATA_FILE}
+            payload={
+                "content": chunk,
+                "chunk_index": index,
+                "source": DATA_FILE
+            }
         )
         points.append(point)
 
-    edge_shard.update(
-        UpdateOperation.upsert_points(points)
-    )
+    edge_shard.update(UpdateOperation.upsert_points(points))
 
-    print(f"Inserted {len(points)} chunks into Qdrant Edge")
-
+    print(f"Inserted {len(points)} structured sections")
 
 # -------- RUN --------
 if __name__ == "__main__":
