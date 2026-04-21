@@ -109,3 +109,4 @@ Swagger UI:
 - **Changed `data.txt` but old answers still appear**
   - Re-run ingestion. Current `ingest.py` rebuilds the shard cleanly each run.
 
+## This project is done in collaboration with [superteams.ai](https://www.superteams.ai/)
